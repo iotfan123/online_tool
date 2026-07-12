@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>MCU 段码 LCD 可视化引脚配置工具</title>
+    <style>
+        :root {
+            --bg-color: #f4f6f9;
+            --chip-color: #1e1e24;
+            --pin-bg: #ffffff;
+            --pin-border: #dcdfe6;
+            --pin-active-bg: #ecf5ff;
+            --pin-active-border: #409eff;
+            --pin-active-text: #409eff;
+            --pin-disabled-bg: #f5f7fa;
+            --pin-disabled-text: #c0c4cc;
+            
+            /* 左右两侧引脚的标准物理尺寸 */
+            --pin-lr-width: 105px;
+            --pin-lr-height: 42px;
+            
+            /* 上下两侧引脚的标准物理尺寸 */
+            --pin-tb-width: 42px;
+            --pin-tb-height: 105px;
+        }
+        body {
+            font-family: "Helvetica Neue", Helvetica, "PingFang SC", sans-serif;
+            background: var(--bg-color);
+            margin: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .controls {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+            display: flex;
+            gap: 25px;
+            align-items: center;
+        }
+        label {
+            font-size: 14px;
+            font-weight: bold;
+            color: #606266;
+        }
+        select {
+            padding: 8px 15px;
+            border-radius: 4px;
+            border: 1px solid var(--pin-border);
+            font-size: 14px;
+            margin-left: 8px;
+            outline: none;
+        }
+        .chip-container {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: auto;
+        }
+
+        /* 3x3 宏观布局矩阵 */
+        .chip-grid-matrix {
+            display: grid;
+            grid-template-columns: var(--pin-lr-width) auto var(--pin-lr-width);
+            grid-template-rows: var(--pin-tb-height) auto var(--pin-tb-height);
+            align-items: center;
+            justify-items: center;
+        }
+
+        .side-container {
+            display: grid;
+            gap: 8px;
+            width: 100%;
+            height: 100%;
+            align-items: center;
+            justify-items: center;
+        }
+        
+        #side-top    { grid-column: 2; grid-row: 1; width: 100%; }
+        #side-bottom { grid-column: 2; grid-row: 3; width: 100%; }
+        #side-left   { grid-column: 1; grid-row: 2; height: 100%; }
+        #side-right  { grid-column: 3; grid-row: 2; height: 100%; }
+
+        /* 芯片本体 */
+        .chip-body {
+            grid-column: 2;
+            grid-row: 2;
+            background: var(--chip-color);
+            border-radius: 12px;
+            width: 100%;
+            height: 100%;
+            position: relative;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.6), 0 4px 10px rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-sizing: border-box;
+        }
+        .chip-body::before {
+            content: '';
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            width: 12px;
+            height: 12px;
+            background: #3a3a45;
+            border-radius: 50%;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+        }
+        .chip-logo {
+            color: #7f8c8d;
+            font-size: 18px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        /* 引脚基础样式 */
+        .pin {
+            background: var(--pin-bg);
+            border: 1px solid var(--pin-border);
+            color: #303133;
+            font-size: 11px;
+            display: flex;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-sizing: border-box;
+            user-select: none;
+            border-radius: 4px;
+            padding: 4px;
+            text-align: center;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        /* ==================== 左右两侧引脚：完美的横向排布 ==================== */
+        .side-left .pin, .side-right .pin {
+            width: var(--pin-lr-width) !important;
+            height: var(--pin-lr-height) !important;
+            flex-direction: row; 
+            justify-content: flex-start;
+            padding-left: 8px;
+        }
+        .side-left .pin .pin-num, .side-right .pin .pin-num {
+            font-weight: bold;
+            color: #909399;
+            font-size: 10px;
+            margin-right: 6px;
+        }
+
+        /* ==================== 💡 上下两侧引脚：利用 Transform 彻底搞定旋转 ==================== */
+        .side-top .pin, .side-bottom .pin {
+            width: var(--pin-tb-width) !important;
+            height: var(--pin-tb-height) !important;
+            padding: 0 !important;
+            overflow: visible !important; /* 允许旋转后的文本自由延伸 */
+        }
+
+        /* 建立一个绝对定位的内部包裹盒，其宽度等于引脚高度，方便文本横向展开后整体旋转 */
+        .pin-rotate-box {
+            position: absolute;
+            width: var(--pin-tb-height);
+            height: var(--pin-tb-width);
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            /* ⚡ 核心大招：逆时针精准旋转 90 度，把横向变成完美的纵向 */
+            transform: rotate(-90deg); 
+            transform-origin: center center;
+        }
+
+        .pin-rotate-box .pin-num {
+            font-weight: bold;
+            color: #909399;
+            font-size: 10px;
+            margin-right: 6px; /* 旋转后，这变成了字与字之间的间距 */
+        }
+
+        /* 状态样式 */
+        .pin:hover {
+            border-color: #c6e2ff;
+            background-color: #f5fbfffc;
+        }
+        .pin.active {
+            background: var(--pin-active-bg);
+            border-color: var(--pin-active-border);
+            color: var(--pin-active-text);
+            box-shadow: 0 0 6px rgba(64,158,255,0.2);
+        }
+        .pin.active .pin-num { color: var(--pin-active-border); }
+        .pin.disabled {
+            background: var(--pin-disabled-bg);
+            color: var(--pin-disabled-text);
+            cursor: not-allowed;
+            border-color: var(--pin-border);
+        }
+        .pin.disabled .pin-num { color: var(--pin-disabled-text); }
+
+        /* 底部输出区 */
+        .output-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .output-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .copy-btn {
+            background: #409eff;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .copy-btn:hover { background: #66b1ff; }
+        textarea {
+            width: 100%;
+            height: 250px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            background: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 6px;
+            border: none;
+            resize: vertical;
+            box-sizing: border-box;
+            outline: none;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <label>芯片系列: 
+            <select id="seriesSelect" onchange="initPackageSelect()"></select>
+        </label>
+        <label>封装规格: 
+            <select id="packageSelect" onchange="renderChipLayout()"></select>
+        </label>
+        <div style="margin-left: auto; font-size: 13px; color: #909399;">
+            💡 提示：点击物理引脚切换功能状态。上下两侧文字已完美实现逆时针 90 度整体旋转延伸。
+        </div>
+    </div>
+
+    <div class="chip-container">
+        <div id="chipGridMatrix" class="chip-grid-matrix">
+            <div class="side-container" id="side-top"></div>
+            <div class="side-container" id="side-bottom"></div>
+            <div class="side-container" id="side-left"></div>
+            <div class="side-container" id="side-right"></div>
+            
+            <div class="chip-body" id="chipBody">
+                <div class="chip-logo" id="chipLogo">MCU</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="output-container">
+        <div class="output-header">
+            <label style="font-size: 16px;">生成的自动初始化代码 (C 语言):</label>
+            <button class="copy-btn" onclick="copyCode()">一键复制生成代码</button>
+        </div>
+        <textarea id="codeOutput" readonly placeholder="点击上方引脚配置后在此处动态渲染 C 源码..."></textarea>
+    </div>
+
+<script>
+// ==================== 数据结构定义 ====================
+const Series_X500_DB = [
+    { name: "PA0/SEG0",  has_analog: true,  analog_reg: "ANSELA", analog_bit: 0, lcd_reg: "LCD_SEGEN0", lcd_bit: 0 },
+    { name: "PA1/SEG1",  has_analog: true,  analog_reg: "ANSELA", analog_bit: 1, lcd_reg: "LCD_SEGEN0", lcd_bit: 1 },
+    { name: "PA2/SEG2",  has_analog: true,  analog_reg: "ANSELA", analog_bit: 2, lcd_reg: "LCD_SEGEN0", lcd_bit: 2 },
+    { name: "PA3/SEG3",  has_analog: true,  analog_reg: "ANSELA", analog_bit: 3, lcd_reg: "LCD_SEGEN0", lcd_bit: 3 },
+    { name: "PA4/COM0",  has_analog: false, lcd_reg: "LCD_COMEN",  lcd_bit: 0 },
+    { name: "PA5/COM1",  has_analog: false, lcd_reg: "LCD_COMEN",  lcd_bit: 1 },
+    { name: "PA6/COM2",  has_analog: false, lcd_reg: "LCD_COMEN",  lcd_bit: 2 },
+    { name: "PA7/COM3",  has_analog: false, lcd_reg: "LCD_COMEN",  lcd_bit: 3 },
+    { name: "PB0/SEG4",  has_analog: true,  analog_reg: "ANSELB", analog_bit: 0, lcd_reg: "LCD_SEGEN0", lcd_bit: 4 },
+    { name: "PB1/SEG5",  has_analog: true,  analog_reg: "ANSELB", analog_bit: 1, lcd_reg: "LCD_SEGEN0", lcd_bit: 5 },
+    { name: "PB2/SEG6",  has_analog: true,  analog_reg: "ANSELB", analog_bit: 2, lcd_reg: "LCD_SEGEN0", lcd_bit: 6 },
+    { name: "PB3/SEG7",  has_analog: true,  analog_reg: "ANSELB", analog_bit: 3, lcd_reg: "LCD_SEGEN0", lcd_bit: 7 },
+    { name: "VCC",       is_power: true },
+    { name: "GND",       is_power: true },
+    { name: "PB4",       has_analog: false },
+    { name: "PB5",       has_analog: false }
+];
+
+const ChipModels = {
+    "Series_X500": {
+        db: Series_X500_DB,
+        packages: {
+            "QFN16": [12,13,0,1,  2,3,4,5,  6,7,8,9,  10,11,14,15],
+            "QFN20": [12,13,0,1,2,  3,4,5,6,7,  8,9,10,11,14, 15,0,1,2,3],
+            "QFN24": [12,13,0,1,2,3,  4,5,6,7,8,9,  10,11,14,15,0,1,  2,3,4,5,6,7],
+            "QFN32": [12,13,0,1,2,3,4,5,  6,7,8,9,10,11,14,15,  0,1,2,3,4,5,6,7,  8,9,10,11,12,13,14,15],
+            "QFN48": [
+                12,13,0,1,2,3,4,5,6,7,8,9,  10,11,14,15,0,1,2,3,4,5,6,7, 
+                8,9,10,11,12,13,14,15,0,1,2,3, 4,5,6,7,8,9,10,11,14,15,12,13
+            ]
+        }
+    }
+};
+
+let activePins = new Set();
+
+// ==================== 排版渲染引擎 ====================
+function initSeriesSelect() {
+    const select = document.getElementById("seriesSelect");
+    for (let series in ChipModels) {
+        select.options.add(new Option(series, series));
+    }
+    initPackageSelect();
+}
+
+function initPackageSelect() {
+    const series = document.getElementById("seriesSelect").value;
+    const select = document.getElementById("packageSelect");
+    select.innerHTML = "";
+    activePins.clear();
+    
+    for (let pkg in ChipModels[series].packages) {
+        select.options.add(new Option(pkg, pkg));
+    }
+    renderChipLayout();
+}
+
+function renderChipLayout() {
+    const series = document.getElementById("seriesSelect").value;
+    const pkg = document.getElementById("packageSelect").value;
+    const pinMap = ChipModels[series].packages[pkg];
+    const db = ChipModels[series].db;
+
+    const totalPins = pinMap.length;
+    const sideCount = totalPins / 4; 
+
+    // 根据边引脚数动态计算芯片本体的长宽像素
+    const dynamicBodyLength = sideCount * 20 + (sideCount - 1) * 8; 
+
+    const matrix = document.getElementById("chipGridMatrix");
+    matrix.style.gridTemplateColumns = `var(--pin-lr-width) ${dynamicBodyLength}px var(--pin-lr-width)`;
+    matrix.style.gridTemplateRows = `var(--pin-tb-height) ${dynamicBodyLength}px var(--pin-tb-height)`;
+
+    document.getElementById("chipLogo").innerText = pkg;
+
+    // 分配四个侧边的网格
+    document.getElementById("side-left").style.gridTemplateColumns = "1fr";
+    document.getElementById("side-left").style.gridTemplateRows = `repeat(${sideCount}, 20px)`;
+    document.getElementById("side-right").style.gridTemplateColumns = "1fr";
+    document.getElementById("side-right").style.gridTemplateRows = `repeat(${sideCount}, 20px)`;
+    
+    document.getElementById("side-top").style.gridTemplateColumns = `repeat(${sideCount}, 20px)`;
+    document.getElementById("side-top").style.gridTemplateRows = "1fr";
+    document.getElementById("side-bottom").style.gridTemplateColumns = `repeat(${sideCount}, 20px)`;
+    document.getElementById("side-bottom").style.gridTemplateRows = "1fr";
+
+    const sides = {
+        left: document.getElementById("side-left"),
+        bottom: document.getElementById("side-bottom"),
+        right: document.getElementById("side-right"),
+        top: document.getElementById("side-top")
+    };
+    Object.values(sides).forEach(s => s.innerHTML = "");
+
+    pinMap.forEach((dbIndex, i) => {
+        const pinNumber = i + 1;
+        const pinData = db[dbIndex] || { name: `NC` };
+
+        const pinEl = document.createElement("div");
+        pinEl.className = "pin";
+
+        // 判断当前引脚是否属于上下两侧
+        const isTopOrBottom = (pinNumber > sideCount && pinNumber <= sideCount * 2) || (pinNumber > sideCount * 3);
+
+        if (isTopOrBottom) {
+            // 💡 核心改良：如果是上下引脚，注入一个专门用来做 transform: rotate(-90deg) 的旋转盒
+            pinEl.innerHTML = `
+                <div class="pin-rotate-box">
+                    <span class="pin-num">${pinNumber}-</span>
+                    <span class="pin-name">${pinData.name}</span>
+                </div>`;
+        } else {
+            // 左右两侧引脚维持原样
+            pinEl.innerHTML = `<span class="pin-num">${pinNumber}-</span><span class="pin-name">${pinData.name}</span>`;
+        }
+
+        if (pinData.is_power || (!pinData.lcd_reg)) {
+            pinEl.classList.add("disabled");
+        } else {
+            if (activePins.has(pinNumber)) pinEl.classList.add("active");
+            pinEl.onclick = () => togglePinActive(pinNumber);
+        }
+
+        // 逆时针规则分发引脚到四个边 (左 -> 下 -> 右 -> 上)
+        if (pinNumber <= sideCount) {
+            sides.left.appendChild(pinEl);
+        } else if (pinNumber <= sideCount * 2) {
+            sides.bottom.appendChild(pinEl);
+        } else if (pinNumber <= sideCount * 3) {
+            sides.right.insertBefore(pinEl, sides.right.firstChild);
+        } else {
+            sides.top.insertBefore(pinEl, sides.top.firstChild);
+        }
+    });
+
+    generateCSource();
+}
+
+function togglePinActive(pinNumber) {
+    if (activePins.has(pinNumber)) {
+        activePins.delete(pinNumber);
+    } else {
+        activePins.add(pinNumber);
+    }
+    renderChipLayout();
+}
+
+// ==================== 代码生成引擎 ====================
+function generateCSource() {
+    const series = document.getElementById("seriesSelect").value;
+    const pkg = document.getElementById("packageSelect").value;
+    const pinMap = ChipModels[series].packages[pkg];
+    const db = ChipModels[series].db;
+
+    let analogRegs = {}; 
+    let lcdRegs = {};   
+
+    activePins.forEach(pinNum => {
+        const dbIndex = pinMap[pinNum - 1];
+        const pinData = db[dbIndex];
+
+        if (pinData && pinData.has_analog) {
+            analogRegs[pinData.analog_reg] = (analogRegs[pinData.analog_reg] || 0) | (1 << pinData.analog_bit);
+        }
+        if (pinData && pinData.lcd_reg) {
+            lcdRegs[pinData.lcd_reg] = (lcdRegs[pinData.lcd_reg] || 0) | (1 << pinData.lcd_bit);
+        }
+    });
+
+    let code = `/**\n * @file    lcd_pins_auto_gen.c\n * @note    目标芯片封装: ${pkg}\n */\n\n`;
+    code += `void LCD_Hardware_Init(void) {\n`;
+    
+    if (Object.keys(analogRegs).length > 0) {
+        code += `    /* --- 1. 关闭对应引脚的模拟复用功能 --- */\n`;
+        for (let [reg, mask] of Object.entries(analogRegs)) {
+            code += `    ${reg} &= ~(0x${mask.toString(16).toUpperCase()}U);\n`;
+        }
+        code += `\n`;
+    }
+
+    if (Object.keys(lcdRegs).length > 0) {
+        code += `    /* --- 2. 开启对应的 LCD 驱动功能 (COM/SEG) --- */\n`;
+        for (let [reg, mask] of Object.entries(lcdRegs)) {
+            code += `    ${reg} |= 0x${mask.toString(16).toUpperCase()}U;\n`;
+        }
+    } else {
+        code += `    // 提示: 当前未选中任何 LCD 驱动引脚\n`;
+    }
+
+    code += `}\n`;
+    document.getElementById("codeOutput").value = code;
+}
+
+function copyCode() {
+    const textarea = document.getElementById("codeOutput");
+    textarea.select();
+    document.execCommand('copy');
+    alert("代码已成功复制！");
+}
+
+window.onload = initSeriesSelect;
+</script>
+</body>
+</html>
