@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CH5xx串口分频与波特率误差计算器</title>
+    <style>
+        /* --- 基础整体布局 --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #f5f7fa;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .calc-container {
+            background: #ffffff;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 550px;
+        }
+        h3 { margin-top: 0; color: #333; text-align: center; }
+        .formula-box {
+            background-color: #f0f5ff;
+            border-left: 4px solid #1890ff;
+            padding: 10px 14px;
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 20px;
+            border-radius: 0 6px 6px 0;
+        }
+        .input-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        input, select {
+            padding: 8px 12px;
+            border: 1px solid #ccd0d5;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .flex-input { flex: 1; }
+
+        /* --- 紧凑表格与对齐样式 --- */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 5px 12px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        /* 列对齐控制：1、3列右对齐并留呼吸间距；2、4列居中 */
+        th:nth-child(1), td:nth-child(1),
+        th:nth-child(3), td:nth-child(3) { text-align: right; padding-right: 24px; }
+        th:nth-child(2), td:nth-child(2),
+        th:nth-child(4), td:nth-child(4) { text-align: center; }
+
+        /* 突出显示自定义的那一行数据 */
+        .custom-row { background-color: #fffbe6; }
+
+        /* --- 误差状态颜色 --- */
+        .error-safe { color: #52c41a; font-weight: bold; }
+        .error-warning { color: #faad14; font-weight: bold; }
+        .error-danger { color: #ff4d4f; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="calc-container">
+    <h3>CH5xx串口波特率分频误差计算器</h3>
+    
+    <div class="formula-box">
+        <strong>分频逻辑：</strong> 实际频率 = 主频 / 8 / 分频系数 (必须为整数)
+    </div>
+
+    <!-- 第一行输入：主频配置 -->
+    <div class="input-row">
+        <input type="number" id="main-freq" value="48" oninput="calculate()" placeholder="主频" class="flex-input">
+        <select id="freq-unit" onchange="calculate()">
+            <option value="1000000" selected>MHz</option>
+            <option value="1000">kHz</option>
+            <option value="1">Hz</option>
+        </select>
+        <select id="preset-freq" onchange="applyPreset(this.value)">
+            <option value="">-- 常用主频 --</option>
+            <option value="16">16 MHz</option>
+            <option value="24">24 MHz</option>
+            <option value="32">32 MHz</option>
+            <option value="48">48 MHz</option>
+            <option value="60">60 MHz</option>
+            <option value="62.4">62.4 MHz</option>
+            <option value="78">78 MHz</option>
+            <option value="80">80 MHz</option>
+            <option value="96">96 MHz</option>
+            <option value="100">100 MHz</option>
+            <option value="120">120 MHz</option>
+        </select>
+    </div>
+
+    <!-- 第二行输入：用户自定义波特率 -->
+    <div class="input-row">
+        <input type="number" id="custom-baud" oninput="calculate()" placeholder="💡 输入自定义波特率（如：230400）" class="flex-input">
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>目标波特率</th>
+                <th>最佳分频数</th>
+                <th>实际波特率</th>
+                <th>误差率</th>
+            </tr>
+        </thead>
+        <tbody id="result-table-body"></tbody>
+    </table>
+</div>
+
+<script>
+    // 基础固定波特率列表
+    const baseBauds =  [1200,2400,4800, 9600, 19200, 38400, 57600, 115200,230400,460800,921600,
+                            1000000,
+                            1500000,
+                            2000000,
+                            2500000,
+                            3000000,
+                            4000000,
+                            5000000,
+                            6000000
+							]
+
+    // 法国标准千分位空格格式化器
+    const formatter = new Intl.NumberFormat('fr-FR', { useGrouping: true }); 
+
+    function applyPreset(val) {
+        if(val) {
+            document.getElementById('main-freq').value = val;
+            document.getElementById('freq-unit').value = "1000000";
+            calculate();
+        }
+    }
+
+    function calculate() {
+        const freqInput = parseFloat(document.getElementById('main-freq').value);
+        const unitMultiplier = parseFloat(document.getElementById('freq-unit').value);
+        const customBaudInput = parseInt(document.getElementById('custom-baud').value);
+        const tbody = document.getElementById('result-table-body');
+        
+        tbody.innerHTML = '';
+        if (isNaN(freqInput) || freqInput <= 0) return;
+
+        const f_main = freqInput * unitMultiplier;
+
+        // 【核心维护技巧】：利用解构赋值复制基础数组
+        const currentBauds = [...baseBauds];
+        
+        // 如果用户输入了合法的自定义波特率，直接 push 到列表最后（也可以用 unshift 放最前面）
+        if (!isNaN(customBaudInput) && customBaudInput > 0) {
+            currentBauds.unshift(customBaudInput);
+        }
+
+        currentBauds.forEach(targetBaud => {
+            const idealDiv = f_main / (8 * targetBaud);
+            let actualDiv = Math.max(1, Math.round(idealDiv));
+
+            const actualBaud = f_main / (8 * actualDiv);
+            const errorPercent = ((actualBaud - targetBaud) / targetBaud) * 100;
+            const absError = Math.abs(errorPercent);
+
+            let errClass = 'error-safe';
+            if (absError > 2.5) errClass = 'error-danger';
+            else if (absError > 1.5) errClass = 'error-warning';
+
+            // 判断这一行是不是用户自定义的那一行，如果是，就加一个特殊的 CSS 类来高亮
+            const isCustom = (targetBaud === customBaudInput);
+            const rowClass = isCustom ? 'class="custom-row"' : '';
+            const labelPrefix = isCustom ? '⭐ ' : ''; // 自定义行加个星星标记
+
+            const row = document.createElement('tr');
+            if (rowClass) row.className = 'custom-row';
+            
+            row.innerHTML = `
+                <td><strong>${labelPrefix}${formatter.format(targetBaud)}</strong></td>
+                <td>${actualDiv} <small style="color:#aaa;">(${idealDiv.toFixed(2)})</small></td>
+                <td>${formatter.format(Math.round(actualBaud))} bps</td>
+                <td class="${errClass}">${errorPercent >= 0 ? '+' : ''}${errorPercent.toFixed(2)}%</td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    window.onload = calculate;
+</script>
+
+</body>
+</html>
